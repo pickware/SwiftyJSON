@@ -301,14 +301,16 @@ private func resolveContent(for jsonObject: Any) -> Content {
         return .dictionary(dictionary.mapValues(resolveContent))
     case let array as [Any]:
         return .array(array.map(resolveContent))
+    case let string as String:
+        return .string(string)
+    case let number as NSNumber:
+            return number.isBool ? .bool(number.boolValue) : .number(number)
     case nil:
         return .null
     case is NSNull:
         return .null
-    case let string as String:
-        return .string(string)
-    case let number as NSNumber:
-        return number.isBool ? .bool(number.boolValue) : .number(number)
+    case is AnyOptional:
+        return .null
     default:
         return .unknown
     }
@@ -1460,3 +1462,7 @@ extension JSON: Codable {
         }
     }
 }
+
+fileprivate protocol AnyOptional {}
+
+extension Optional: AnyOptional {}

@@ -274,4 +274,11 @@ class BaseTests: XCTestCase {
             // everything is OK
         }
     }
+
+    func testOptionalResolving() {
+        let nilString: String? = nil
+        let json = JSON(nilString as Any)
+
+        XCTAssertEqual(json.type, .null)
+    }
 }
