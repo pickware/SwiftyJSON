@@ -304,7 +304,7 @@ private func resolveContent(for jsonObject: Any) -> Content {
     case let string as String:
         return .string(string)
     case let number as NSNumber:
-            return number.isBool ? .bool(number.boolValue) : .number(number)
+        return number.isBool ? .bool(number.boolValue) : .number(number)
     case nil:
         return .null
     case is NSNull:
