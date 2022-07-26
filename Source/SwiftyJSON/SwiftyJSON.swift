@@ -69,21 +69,32 @@ See http://www.json.org
 */
 
 /// Options of JSON content
-fileprivate enum Content {
+public indirect enum Content {
     case number(NSNumber)
     case bool(Bool)
     case string(String)
+    case array([Content])
+    case dictionary([String: Content])
     case null
-    case array([Any])
-    case dictionary([String: Any])
     case unknown
+
+    fileprivate var rawValue: Any {
+        switch self {
+            case .number(let rawNumber):            return rawNumber
+            case .bool(let rawBool):                return rawBool
+            case .string(let rawString):            return rawString
+            case .array(let rawArray):              return rawArray.map(\.rawValue)
+            case .dictionary(let rawDictionary):    return rawDictionary.mapValues(\.rawValue)
+            case .null, .unknown:                   return NSNull()
+        }
+    }
 }
 
 /// Type of JSON content
 public enum Type: Int {
     case number
-    case string
     case bool
+    case string
     case array
     case dictionary
     case null
@@ -121,7 +132,7 @@ public struct JSON {
             do {
                 try self.init(data: object)
             } catch {
-                self.init(jsonObject: NSNull())
+                self.init(content: .null)
             }
         default:
             self.init(jsonObject: object)
@@ -139,9 +150,21 @@ public struct JSON {
 		if let data = jsonString.data(using: .utf8) {
 			self.init(data)
 		} else {
-            self.init(jsonObject: NSNull())
+            self.init(content: .null)
 		}
 	}
+
+    /**
+     Creates a JSON using the given content.
+
+     - parameter content: The content to be used by the JSON.
+
+     - returns: The created JSON
+     */
+    fileprivate init(content: Content) {
+        self.content = content
+        self.error = nil
+    }
     
     /**
      Creates a JSON using error parameter.
@@ -241,14 +264,7 @@ public struct JSON {
     /// Object in JSON
     public var object: Any {
         get {
-            switch content {
-            case .dictionary(let rawDictionary):    return rawDictionary
-            case .array(let rawArray):              return rawArray
-            case .string(let rawString):            return rawString
-            case .number(let rawNumber):            return rawNumber
-            case .bool(let rawBool):                return rawBool
-            case .null, .unknown:                   return NSNull()
-            }
+            content.rawValue
         }
         set {
             (content, error) = resolveContentAndError(for: newValue)
@@ -264,7 +280,7 @@ public struct JSON {
     /// The static null JSON
     @available(*, unavailable, renamed:"null")
     public static var nullJSON: JSON { return null }
-    public static let null = JSON(NSNull())
+    public static let null = JSON(content: .null)
 }
 
 /// Private method for resolving raw json object's content and error
@@ -276,11 +292,15 @@ private func resolveContentAndError(for jsonObject: Any) -> (Content, SwiftyJSON
 
 /// Private method for resolving raw json object's content
 private func resolveContent(for jsonObject: Any) -> Content {
-    switch unwrap(jsonObject) {
+    switch jsonObject {
+    case let json as JSON:
+        return json.content
+    case let content as Content:
+        return content
     case let dictionary as [String: Any]:
-        return .dictionary(dictionary)
+        return .dictionary(dictionary.mapValues(resolveContent))
     case let array as [Any]:
-        return .array(array)
+        return .array(array.map(resolveContent))
     case nil:
         return .null
     case is NSNull:
@@ -291,20 +311,6 @@ private func resolveContent(for jsonObject: Any) -> Content {
         return number.isBool ? .bool(number.boolValue) : .number(number)
     default:
         return .unknown
-    }
-}
-
-/// Private method to unwarp an object recursively
-private func unwrap(_ object: Any) -> Any {
-    switch object {
-    case let json as JSON:
-        return unwrap(json.object)
-    case let array as [Any]:
-        return array.map(unwrap)
-    case let dictionary as [String: Any]:
-        return dictionary.mapValues(unwrap)
-    default:
-        return object
     }
 }
 
@@ -349,8 +355,7 @@ public enum Index<T: Any>: Comparable {
     }
 }
 
-public typealias JSONIndex = Index<JSON>
-public typealias JSONRawIndex = Index<Any>
+public typealias JSONRawIndex = Index<Content>
 
 extension JSON: Swift.Collection {
 
@@ -389,10 +394,10 @@ extension JSON: Swift.Collection {
         switch content {
         case .array(let rawArray):
             guard case .array(let idx) = position else { return ("", JSON.null) }
-            return (String(idx), JSON(rawArray[idx]))
+            return (String(idx), JSON(content: rawArray[idx]))
         case .dictionary(let rawDictionary):
             guard case .dictionary(let idx) = position else { return ("", JSON.null) }
-            return (rawDictionary[idx].key, JSON(rawDictionary[idx].value))
+            return (rawDictionary[idx].key, JSON(content: rawDictionary[idx].value))
         default:
             return ("", JSON.null)
         }
@@ -436,7 +441,7 @@ extension JSON {
             guard rawArray.indices.contains(index) else {
                 return JSON(error: .indexOutOfBounds)
             }
-            return JSON(rawArray[index])
+            return JSON(content: rawArray[index])
         }
         set {
             guard
@@ -447,7 +452,7 @@ extension JSON {
                 return
             }
             var copy = rawArray
-            copy[index] = newValue.object
+            copy[index] = newValue.content
             content = .array(copy)
         }
     }
@@ -458,10 +463,10 @@ extension JSON {
             guard case .dictionary(let rawDictionary) = content else {
                 return JSON(error: self.error ?? .wrongType)
             }
-            guard let obj = rawDictionary[key] else {
+            guard let content = rawDictionary[key] else {
                 return JSON(error: .notExist)
             }
-            return JSON(obj)
+            return JSON(content: content)
         }
         set {
             guard
@@ -471,7 +476,7 @@ extension JSON {
                 return
             }
             var copy = rawDictionary
-            copy[key] = newValue.object
+            copy[key] = newValue.content
             content = .dictionary(copy)
         }
     }
@@ -738,7 +743,7 @@ extension JSON {
     //Optional [JSON]
     public var array: [JSON]? {
         guard case .array(let rawArray) = content else { return nil }
-        return rawArray.map { JSON($0) }
+        return rawArray.map(JSON.init(content:))
     }
 
     //Non-optional [JSON]
@@ -750,13 +755,13 @@ extension JSON {
     public var arrayObject: [Any]? {
         get {
             switch content {
-            case .array(let rawArray): return rawArray
+            case .array(let rawArray): return rawArray.map(\.rawValue)
             default: return nil
             }
         }
         set {
             if let newValue = newValue {
-                update(content: .array(newValue), error: nil)
+                update(content: .array(newValue.map(resolveContent)), error: nil)
             } else {
                 update(content: .null, error: nil)
             }
@@ -771,7 +776,7 @@ extension JSON {
     //Optional [String : JSON]
     public var dictionary: [String: JSON]? {
         guard case .dictionary(let rawDictionary) = content else { return nil }
-        return rawDictionary.mapValues { JSON($0) }
+        return rawDictionary.mapValues(JSON.init(content:))
     }
 
     //Non-optional [String : JSON]
@@ -784,11 +789,11 @@ extension JSON {
     public var dictionaryObject: [String: Any]? {
         get {
             guard case .dictionary(let rawDictionary) = content else { return nil }
-            return rawDictionary
+            return rawDictionary.mapValues(\.rawValue)
         }
         set {
             if let newValue = newValue {
-                update(content: .dictionary(newValue), error: nil)
+                update(content: .dictionary(newValue.mapValues(resolveContent)), error: nil)
             } else {
                 update(content: .null, error: nil)
             }
@@ -1189,46 +1194,46 @@ extension JSON {
 
 extension Content: Comparable {
     
-    static func == (lhs: Content, rhs: Content) -> Bool {
+    public static func == (lhs: Content, rhs: Content) -> Bool {
 
         switch (lhs, rhs) {
         case let (.number(l), .number(r)):          return l == r
         case let (.string(l), .string(r)):          return l == r
         case let (.bool(l), .bool(r)):              return l == r
-        case let (.array(l), .array(r)):            return l as NSArray == r as NSArray
-        case let (.dictionary(l), .dictionary(r)):  return l as NSDictionary == r as NSDictionary
+        case let (.array(l), .array(r)):            return l == r
+        case let (.dictionary(l), .dictionary(r)):  return l == r
         case (.null, .null):                        return true
         default:                                    return false
         }
     }
 
-    static func <= (lhs: Content, rhs: Content) -> Bool {
+    public static func <= (lhs: Content, rhs: Content) -> Bool {
         
         switch (lhs, rhs) {
         case let (.number(l), .number(r)):          return l <= r
         case let (.string(l), .string(r)):          return l <= r
         case let (.bool(l), .bool(r)):              return l == r
-        case let (.array(l), .array(r)):            return l as NSArray == r as NSArray
-        case let (.dictionary(l), .dictionary(r)):  return l as NSDictionary == r as NSDictionary
+        case let (.array(l), .array(r)):            return l == r
+        case let (.dictionary(l), .dictionary(r)):  return l == r
         case (.null, .null):                        return true
         default:                                    return false
         }
     }
 
-    static func >= (lhs: Content, rhs: Content) -> Bool {
+    public static func >= (lhs: Content, rhs: Content) -> Bool {
 
         switch (lhs, rhs) {
         case let (.number(l), .number(r)):          return l >= r
         case let (.string(l), .string(r)):          return l >= r
         case let (.bool(l), .bool(r)):              return l == r
-        case let (.array(l), .array(r)):            return l as NSArray == r as NSArray
-        case let (.dictionary(l), .dictionary(r)):  return l as NSDictionary == r as NSDictionary
+        case let (.array(l), .array(r)):            return l == r
+        case let (.dictionary(l), .dictionary(r)):  return l == r
         case (.null, .null):                        return true
         default:                                    return false
         }
     }
 
-    static func > (lhs: Content, rhs: Content) -> Bool {
+    public static func > (lhs: Content, rhs: Content) -> Bool {
 
         switch (lhs, rhs) {
         case let (.number(l), .number(r)):  return l > r
@@ -1237,7 +1242,7 @@ extension Content: Comparable {
         }
     }
 
-    static func < (lhs: Content, rhs: Content) -> Bool {
+    public static func < (lhs: Content, rhs: Content) -> Bool {
 
         switch (lhs, rhs) {
         case let (.number(l), .number(r)):  return l < r
