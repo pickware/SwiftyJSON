@@ -44,7 +44,7 @@ class PerformanceTests: XCTestCase {
 
     func testInitPerformance() {
         self.measure {
-            for _ in 1...100 {
+            for _ in 1...1_000 {
                 guard let json = try? JSON(data: self.testData) else {
                     XCTFail("Unable to parse testData")
                     return
@@ -60,7 +60,7 @@ class PerformanceTests: XCTestCase {
             return
         }
         self.measure {
-            for _ in 1...100_000 {
+            for _ in 1...1_000 {
                 let object: Any? = json.object
                 XCTAssertTrue(object != nil)
             }
@@ -105,7 +105,7 @@ class PerformanceTests: XCTestCase {
             return
         }
         self.measure {
-            for _ in 1...100 {
+            for _ in 1...1_000 {
                 autoreleasepool {
                     let string = json.rawString()
                     XCTAssertTrue(string != nil)
@@ -150,9 +150,49 @@ class PerformanceTests: XCTestCase {
             ]
         
         self.measure {
-            (1...10_000).forEach { _ in
+            (1...1_000).forEach { _ in
                 let resultValue = dictionary["one"]["two"]["three"]["four"]["five"]
                 XCTAssertTrue(resultValue == "result")
+            }
+        }
+    }
+
+    func testLongNestedArrayPerformance() {
+        let nestedArray = (0..<1_000).map { i in
+            [
+                "one": [
+                    "two": [
+                        "three": [
+                            "four": [
+                                "five": i,
+                            ],
+                        ],
+                    ],
+                ],
+                "two": [
+                    "three": [
+                        "four": [
+                            "five": i,
+                        ],
+                    ],
+                ],
+                "three": [
+                    "four": [
+                        "five": i,
+                    ],
+                ],
+                "four": [
+                    "five": i,
+                ],
+                "five": i,
+            ]
+        }
+        let dictionary: JSON = ["list": nestedArray]
+
+        self.measure {
+            nestedArray.indices.forEach { index in
+                let resultValue = dictionary["list"][index]["five"]
+                XCTAssertEqual(resultValue.int, index)
             }
         }
     }
