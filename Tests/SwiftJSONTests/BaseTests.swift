@@ -276,9 +276,12 @@ class BaseTests: XCTestCase {
     }
 
     func testOptionalResolving() {
-        let nilString: String? = nil
-        let json = JSON(nilString as Any)
+        let nilOptionalString: String? = nil
+        let nonNilOptionalString: String? = "foo"
+        let nonNilOptionalTestCase: XCTestCase? = self
 
-        XCTAssertEqual(json.type, .null)
+        XCTAssertEqual(JSON(nilOptionalString as Any).type, .null)
+        XCTAssertEqual(JSON(nonNilOptionalString as Any).type, .string)
+        XCTAssertEqual(JSON(nonNilOptionalTestCase as Any).type, .unknown)
     }
 }

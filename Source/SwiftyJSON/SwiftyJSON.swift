@@ -309,7 +309,7 @@ private func resolveContent(for jsonObject: Any) -> Content {
         return .null
     case is NSNull:
         return .null
-    case is AnyOptional:
+    case let optionalValue as AnyOptional where optionalValue.isNil:
         return .null
     default:
         return .unknown
@@ -1463,6 +1463,17 @@ extension JSON: Codable {
     }
 }
 
-fileprivate protocol AnyOptional {}
+fileprivate protocol AnyOptional {
+    var isNil: Bool { get }
+}
 
-extension Optional: AnyOptional {}
+extension Optional: AnyOptional {
+    fileprivate var isNil: Bool {
+        switch self {
+            case .some:
+                return false
+            case .none:
+                return true
+        }
+    }
+}
