@@ -284,4 +284,18 @@ class BaseTests: XCTestCase {
         XCTAssertEqual(JSON(nonNilOptionalString as Any).type, .string)
         XCTAssertEqual(JSON(nonNilOptionalTestCase as Any).type, .unknown)
     }
+
+    func testNestedDataResolving() {
+        let json = JSON([
+            "root": #"{"foo": "bar"}"#.data(using: .utf8)!
+        ])
+
+        XCTAssertEqual(json["root"]["foo"].string, "bar")
+
+        let invalidJson = JSON([
+            "root": #"baz"#.data(using: .utf8)!
+        ])
+
+        XCTAssertEqual(invalidJson.error, .invalidJSON)
+    }
 }

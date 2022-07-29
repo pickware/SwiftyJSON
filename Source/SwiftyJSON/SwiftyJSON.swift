@@ -285,26 +285,39 @@ public struct JSON {
 
 /// Private method for resolving raw json object's content and error
 private func resolveContentAndError(for jsonObject: Any) -> (Content, SwiftyJSONError?) {
-    let content = resolveContent(for: jsonObject)
-    let error: SwiftyJSONError? = (content == .unknown) ? .unsupportedType : nil
-    return (content, error)
+    do {
+        let content = try resolveContent(for: jsonObject)
+        let error: SwiftyJSONError? = (content == .unknown) ? .unsupportedType : nil
+
+        return (content, error)
+    } catch let error as SwiftyJSONError {
+        return (.unknown, error)
+    } catch {
+        return (.unknown, .unsupportedType)
+    }
 }
 
 /// Private method for resolving raw json object's content
-private func resolveContent(for jsonObject: Any) -> Content {
+private func resolveContent(for jsonObject: Any) throws -> Content {
     switch jsonObject {
     case let json as JSON:
         return json.content
     case let content as Content:
         return content
     case let dictionary as [String: Any]:
-        return .dictionary(dictionary.mapValues(resolveContent))
+        return .dictionary(try dictionary.mapValues(resolveContent))
     case let array as [Any]:
-        return .array(array.map(resolveContent))
+        return .array(try array.map(resolveContent))
     case let string as String:
         return .string(string)
     case let number as NSNumber:
         return number.isBool ? .bool(number.boolValue) : .number(number)
+    case let data as Data:
+        do {
+            return try JSON(data: data).content
+        } catch {
+            throw SwiftyJSONError.invalidJSON
+        }
     case nil:
         return .null
     case is NSNull:
@@ -763,7 +776,8 @@ extension JSON {
         }
         set {
             if let newValue = newValue {
-                update(content: .array(newValue.map(resolveContent)), error: nil)
+                let (content, error) = resolveContentAndError(for: newValue)
+                update(content: content, error: error)
             } else {
                 update(content: .null, error: nil)
             }
@@ -795,7 +809,8 @@ extension JSON {
         }
         set {
             if let newValue = newValue {
-                update(content: .dictionary(newValue.mapValues(resolveContent)), error: nil)
+                let (content, error) = resolveContentAndError(for: newValue)
+                update(content: content, error: error)
             } else {
                 update(content: .null, error: nil)
             }
