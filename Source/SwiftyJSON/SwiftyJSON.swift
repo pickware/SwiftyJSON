@@ -155,6 +155,18 @@ public struct JSON {
 	}
 
     /**
+     Creates a JSON using error parameter.
+
+     - parameter error: The error to be linked to JSON.
+
+     - returns: The created JSON with error.
+     */
+    public init(error: SwiftyJSONError) {
+        self.content = .null
+        self.error = error
+    }
+
+    /**
      Creates a JSON using the given content.
 
      - parameter content: The content to be used by the JSON.
@@ -164,18 +176,6 @@ public struct JSON {
     fileprivate init(content: Content) {
         self.content = content
         self.error = nil
-    }
-    
-    /**
-     Creates a JSON using error parameter.
-    
-     - parameter error: The error to be linked to JSON.
-    
-     - returns: The created JSON with error.
-     */
-    fileprivate init(error: SwiftyJSONError) {
-        self.content = .null
-        self.error = error
     }
 
 	/**
