@@ -318,8 +318,6 @@ private func resolveContent(for jsonObject: Any) throws -> Content {
         } catch {
             throw SwiftyJSONError.invalidJSON
         }
-    case nil:
-        return .null
     case is NSNull:
         return .null
     case let optionalValue as AnyOptional where optionalValue.isNil:
