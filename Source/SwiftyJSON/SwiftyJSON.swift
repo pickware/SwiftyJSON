@@ -107,10 +107,10 @@ public struct JSON {
 
 	/**
 	 Creates a JSON using the data.
-	
+
 	 - parameter data: The NSData used to convert to json.Top level object in data is an NSArray or NSDictionary
 	 - parameter opt: The JSON serialization reading options. `[]` by default.
-	
+
 	 - returns: The created JSON
 	 */
     public init(data: Data, options opt: JSONSerialization.ReadingOptions = []) throws {
@@ -121,7 +121,7 @@ public struct JSON {
     /**
 	 Creates a JSON object
 	 - note: this does not parse a `String` into JSON, instead use `init(parseJSON: String)`
-	
+
 	 - parameter object: the object
 
 	 - returns: the created JSON object
@@ -141,9 +141,9 @@ public struct JSON {
 
 	/**
 	 Parses the JSON string into a JSON object
-	
+
 	 - parameter json: the JSON string
-	
+
 	 - returns: the created JSON object
 	*/
 	public init(parseJSON jsonString: String) {
@@ -180,9 +180,9 @@ public struct JSON {
 
 	/**
 	 Creates a JSON using the object.
-	
+
 	 - parameter jsonObject:  The object must have the following properties: All objects are NSString/String, NSNumber/Int/Float/Double/Bool, NSArray/Array, NSDictionary/Dictionary, or NSNull; All dictionary keys are NSStrings/String; NSNumbers are not NaN or infinity.
-	
+
 	 - returns: The created JSON
 	 */
     fileprivate init(jsonObject: Any) {
@@ -192,9 +192,9 @@ public struct JSON {
 	/**
 	 Merges another JSON into this JSON, whereas primitive values which are not present in this JSON are getting added,
 	 present values getting overwritten, array values getting appended and nested JSONs getting merged the same way.
- 
+
 	 - parameter other: The JSON which gets merged into this JSON
-	
+
 	 - throws `ErrorWrongType` if the other JSONs differs in type on the top level.
 	 */
     public mutating func merge(with other: JSON) throws {
@@ -204,11 +204,11 @@ public struct JSON {
 	/**
 	 Merges another JSON into this JSON and returns a new JSON, whereas primitive values which are not present in this JSON are getting added,
 	 present values getting overwritten, array values getting appended and nested JSONS getting merged the same way.
-	
+
 	 - parameter other: The JSON which gets merged into this JSON
-	
+
 	 - throws `ErrorWrongType` if the other JSONs differs in type on the top level.
-	
+
 	 - returns: New merged JSON
 	 */
     public func merged(with other: JSON) throws -> JSON {
@@ -254,7 +254,7 @@ public struct JSON {
         case .unknown:      return .unknown
         }
     }
-    
+
     /// Content of JSON
     fileprivate var content: Content
 
@@ -270,7 +270,7 @@ public struct JSON {
             (content, error) = resolveContentAndError(for: newValue)
         }
     }
-    
+
     /// Mutating method that updates JSON's underlying content and error
     private mutating func update(content newContent: Content, error: SwiftyJSONError?) {
         self.content = newContent
@@ -348,7 +348,7 @@ public enum Index<T: Any>: Comparable {
         default:                                              return false
         }
     }
-    
+
     static public func <= (lhs: Index, rhs: Index) -> Bool {
         switch (lhs, rhs) {
         case (.array(let left), .array(let right)):           return left <= right
@@ -357,7 +357,7 @@ public enum Index<T: Any>: Comparable {
         default:                                              return false
         }
     }
-    
+
     static public func >= (lhs: Index, rhs: Index) -> Bool {
         switch (lhs, rhs) {
         case (.array(let left), .array(let right)):           return left >= right
@@ -512,19 +512,19 @@ extension JSON {
 
 	/**
 	 Find a json in the complex data structures by using array of Int and/or String as path.
-	
+
 	 Example:
-	
-	 ```
+
+	 ```swift
 	 let json = JSON[data]
 	 let path = [9,"list","person","name"]
 	 let name = json[path]
 	 ```
-	
+
 	 The same as: let name = json[9]["list"]["person"]["name"]
-	
+
 	 - parameter path: The target json's path.
-	
+
 	 - returns: Return a json found by the path or a null json with error
 	 */
     public subscript(path: [JSONSubscriptType]) -> JSON {
@@ -549,10 +549,14 @@ extension JSON {
      Find a json in the complex data structures by using array of Int and/or String as path.
 
      - parameter path: The target json's path. Example:
-
+     ```swift
      let name = json[9,"list","person","name"]
+     ```
 
-     The same as: let name = json[9]["list"]["person"]["name"]
+     The same as:
+     ```swift
+     let name = json[9]["list"]["person"]["name"]
+     ```
 
      - returns: Return a json found by the path or a null json with error
      */
@@ -606,7 +610,7 @@ extension JSON: Swift.ExpressibleByFloatLiteral {
 
 extension JSON: Swift.ExpressibleByDictionaryLiteral {
     public init(dictionaryLiteral elements: (String, Any)...) {
-        let dictionary = elements.reduce(into: [String: Any](), { $0[$1.0] = $1.1})
+        let dictionary = Dictionary(elements, uniquingKeysWith: { $1 })
         self.init(dictionary)
     }
 }
@@ -1208,7 +1212,7 @@ extension JSON {
 // MARK: - Content: Comparable
 
 extension Content: Comparable {
-    
+
     public static func == (lhs: Content, rhs: Content) -> Bool {
 
         switch (lhs, rhs) {
@@ -1223,7 +1227,7 @@ extension Content: Comparable {
     }
 
     public static func <= (lhs: Content, rhs: Content) -> Bool {
-        
+
         switch (lhs, rhs) {
         case let (.number(l), .number(r)):          return l <= r
         case let (.string(l), .string(r)):          return l <= r
