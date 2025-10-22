@@ -69,7 +69,7 @@ See http://www.json.org
 */
 
 /// Options of JSON content
-public indirect enum Content {
+public indirect enum Content: Sendable {
     case number(NSNumber)
     case bool(Bool)
     case string(String)
@@ -103,7 +103,7 @@ public enum Type: Int {
 
 // MARK: - JSON Base
 
-public struct JSON {
+public struct JSON: Sendable {
 
 	/**
 	 Creates a JSON using the data.
