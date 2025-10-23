@@ -422,12 +422,12 @@ extension JSON: Swift.Collection {
 /**
  *  To mark both String and Int can be used in subscript.
  */
-public enum JSONKey {
+public enum JSONKey: Sendable {
     case index(Int)
     case key(String)
 }
 
-public protocol JSONSubscriptType {
+public protocol JSONSubscriptType: Sendable {
     var jsonKey: JSONKey { get }
 }
 
