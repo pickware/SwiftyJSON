@@ -114,8 +114,7 @@ public struct JSON: Sendable {
 	 - returns: The created JSON
 	 */
     public init(data: Data, options opt: JSONSerialization.ReadingOptions = []) throws {
-        let object: Any = try JSONSerialization.jsonObject(with: data, options: opt)
-        self.init(jsonObject: object)
+        self.init(content: try ContentParser.parse(data: data, options: opt))
     }
 
     /**
