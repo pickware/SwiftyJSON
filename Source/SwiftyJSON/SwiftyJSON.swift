@@ -341,7 +341,7 @@ private struct SerializedObjectConverter {
 
     private var isConvertingInParallel = false
     // Keys repeat throughout a document and `JSONSerialization` mostly returns equal keys as the same object (short
-    // ones as tagged pointers), so each object is bridged to `String` only once.
+    // ones as tagged pointers), so each object is converted to `String` only once.
     private var keysByObject: [ObjectIdentifier: String] = [:]
 
     mutating func content(for object: AnyObject) -> Content {
@@ -388,10 +388,30 @@ private struct SerializedObjectConverter {
         if let key = keysByObject[objectIdentifier] {
             return key
         }
-        let key = object as! String
+        let key = Self.nativeString(for: object as! NSString)
         keysByObject[objectIdentifier] = key
 
         return key
+    }
+
+    // Bridging leaves a `String` backed by the `NSString`, so every comparison with it, as in each dictionary lookup,
+    // reads its contents through Core Foundation. A key Core Foundation stores as ASCII is copied into a native
+    // `String` instead, which stores short keys inline. Other keys, rare in JSON, stay bridged.
+    private static func nativeString(for string: NSString) -> String {
+        let cfString = string as CFString
+        guard let characters = CFStringGetCStringPtr(cfString, CFStringBuiltInEncodings.ASCII.rawValue) else {
+            return string as String
+        }
+        let count = CFStringGetLength(cfString)
+
+        return characters.withMemoryRebound(to: UInt8.self, capacity: count) { characters in
+            let bytes = UnsafeBufferPointer(start: characters, count: count)
+            guard bytes.allSatisfy({ $0 < 0x80 }) else {
+                return string as String
+            }
+
+            return String(decoding: bytes, as: UTF8.self)
+        }
     }
 
     private mutating func arrayContent(for array: NSArray) -> [Content] {
@@ -552,7 +572,9 @@ extension String: JSONSubscriptType {
 extension JSON {
 
     /// If `type` is `.array`, return json whose object is `array[index]`, otherwise return null json with error.
-    fileprivate subscript(index index: Int) -> JSON {
+    ///
+    /// The same as `json[index]`, without the array that the variadic `subscript(path:)` builds on every access.
+    public fileprivate(set) subscript(index index: Int) -> JSON {
         get {
             guard case .array(let rawArray) = content else {
                 return JSON(error: self.error ?? .wrongType)
@@ -577,7 +599,9 @@ extension JSON {
     }
 
     /// If `type` is `.dictionary`, return json whose object is `dictionary[key]` , otherwise return null json with error.
-    fileprivate subscript(key key: String) -> JSON {
+    ///
+    /// The same as `json[key]`, without the array that the variadic `subscript(path:)` builds on every access.
+    public fileprivate(set) subscript(key key: String) -> JSON {
         get {
             guard case .dictionary(let rawDictionary) = content else {
                 return JSON(error: self.error ?? .wrongType)

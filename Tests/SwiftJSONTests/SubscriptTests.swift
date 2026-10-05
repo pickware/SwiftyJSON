@@ -264,4 +264,24 @@ class SubscriptTests: XCTestCase {
         XCTAssertEqual(json["user", "info", "email"], "tom@qq.com")
         XCTAssertEqual(json["user", "feeds"], [77323, 2313, 4545, 323])
     }
+
+    func testKeySubscriptReadsLikeTheSubscriptWithAPath() {
+        let dictionary: JSON = ["a": 1, "b": ["c": "d"], "e": [1, 2], "f": NSNull()]
+        let array: JSON = [1, 2]
+        for (json, key) in [(dictionary, "a"), (dictionary, "b"), (dictionary, "e"), (dictionary, "f"), (dictionary, "missing"), (array, "a"), (dictionary["missing"], "a")] {
+            XCTAssertEqual(json[key: key], json[key], "value of \(key) in \(json)")
+            XCTAssertEqual(json[key: key].error, json[key].error, "error of \(key) in \(json)")
+        }
+        XCTAssertEqual(dictionary[key: "b"][key: "c"], "d")
+    }
+
+    func testIndexSubscriptReadsLikeTheSubscriptWithAPath() {
+        let array: JSON = [1, "two", ["three": 3], NSNull()]
+        let dictionary: JSON = ["a": 1]
+        for (json, index) in [(array, -1), (array, 0), (array, 1), (array, 2), (array, 3), (array, 4), (dictionary, 0), (array[9], 0)] {
+            XCTAssertEqual(json[index: index], json[index], "value at \(index) in \(json)")
+            XCTAssertEqual(json[index: index].error, json[index].error, "error at \(index) in \(json)")
+        }
+        XCTAssertEqual(array[index: 2][key: "three"], 3)
+    }
 }

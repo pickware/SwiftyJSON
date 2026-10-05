@@ -27,6 +27,14 @@ class SerializedObjectConversionTests: XCTestCase {
         }
     }
 
+    func testConvertsKeysOfEveryLength() {
+        let asciiKeys = (0...40).map { String(repeating: "k", count: $0) }
+        let otherKeys = (0...20).map { String(repeating: "ä", count: $0) + "k" } + ["k😀", "€"]
+        let object = "{\((asciiKeys + otherKeys).enumerated().map { #""\#($1)":\#($0)"# }.joined(separator: ","))}"
+        assertConvertsLikeJSONSerialization(Data(object.utf8), options: [])
+        assertConvertsLikeJSONSerialization(Data("[\(Array(repeating: object, count: 300).joined(separator: ","))]".utf8), options: [])
+    }
+
     func testConvertsFragments() {
         for sample in [#""aString""#, "42", "-1.5", "1e400", "null", "true", "false", #""""#] {
             assertConvertsLikeJSONSerialization(Data(sample.utf8), options: .fragmentsAllowed)
@@ -195,6 +203,13 @@ class SerializedObjectConversionTests: XCTestCase {
                 XCTFail("keys \(actualKeys) instead of \(expectedKeys) \(location)", file: file, line: line)
                 return
             }
+            XCTAssertEqual(
+                actualDictionary.keys.map { Array($0.utf16) }.sorted { $0.lexicographicallyPrecedes($1) },
+                expectedDictionary.keys.map { Array($0.utf16) }.sorted { $0.lexicographicallyPrecedes($1) },
+                "keys as UTF-16 \(location)",
+                file: file,
+                line: line
+            )
             for (key, value) in actualDictionary {
                 assertIdentical(value, expectedDictionary[key]!, path: "\(path).\(key)", data: data, file: file, line: line)
             }
