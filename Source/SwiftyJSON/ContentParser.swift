@@ -1,43 +1,63 @@
 //  ContentParser.swift
 //
-//  Parses JSON data straight into `Content`.
+//  Parses UTF-8 JSON data straight into `Content`.
 //
 //  `JSONSerialization` produces a tree of Foundation objects, which then has to be walked a second time to build the
 //  `Content` tree `JSON` stores. For large documents that second walk costs several times the parse itself, so this
-//  parser skips the intermediate representation.
+//  parser skips the intermediate representation. It declines every document it cannot parse exactly like
+//  `JSONSerialization`, so that the caller can leave those to `JSONSerialization`.
 
 import Foundation
 
 internal enum ContentParser {
-    internal static func parse(
-        data: Data,
-        options: JSONSerialization.ReadingOptions
-    ) throws -> Content {
-        try data.withUnsafeBytes { buffer -> Content in
-            var parser = Parser(bytes: buffer.bindMemory(to: UInt8.self), options: options)
 
-            return try parser.parseDocument()
+    private static let supportedOptions: JSONSerialization.ReadingOptions = [
+        .mutableContainers, .mutableLeaves, .fragmentsAllowed,
+    ]
+
+    // `JSONSerialization` rejects any value enclosed by this many containers, though it accepts an empty container
+    // at that depth.
+    private static let maximumEnclosingContainerCount = 513
+
+    internal static func parse(data: Data, options: JSONSerialization.ReadingOptions) -> Content? {
+        guard supportedOptions.isSuperset(of: options) else {
+            return nil
+        }
+
+        return data.withUnsafeBytes { buffer in
+            var parser = Parser(
+                bytes: buffer.bindMemory(to: UInt8.self),
+                allowsFragments: options.contains(.fragmentsAllowed)
+            )
+
+            return try? parser.parseDocument()
         }
     }
 
-    fileprivate struct Parser {
-        fileprivate let bytes: UnsafeBufferPointer<UInt8>
-        fileprivate let options: JSONSerialization.ReadingOptions
-        fileprivate var index: Int = 0
+    private struct Declined: Error {}
 
-        fileprivate mutating func parseDocument() throws -> Content {
-            self.skipWhitespace()
-            let content = try self.parseValue()
-            self.skipWhitespace()
-            guard self.index == self.bytes.count else {
-                throw SwiftyJSONError.invalidJSON
+    private struct Parser {
+        let bytes: UnsafeBufferPointer<UInt8>
+        let allowsFragments: Bool
+        var index = 0
+        var enclosingContainerCount = 0
+
+        mutating func parseDocument() throws -> Content {
+            if bytes.starts(with: [0xEF, 0xBB, 0xBF]) {
+                index = 3
             }
-            if !self.options.contains(.allowFragments) {
+            skipWhitespace()
+            let content = try parseValue()
+            skipWhitespace()
+            guard index == bytes.count else {
+                throw Declined()
+            }
+            if !allowsFragments {
                 switch content {
-                    case .array, .dictionary:
-                        break
-                    default:
-                        throw SwiftyJSONError.invalidJSON
+                case .array, .dictionary:
+                    break
+                default:
+                    throw Declined()
                 }
             }
 
@@ -45,289 +65,334 @@ internal enum ContentParser {
         }
 
         private mutating func parseValue() throws -> Content {
-            guard self.index < self.bytes.count else {
-                throw SwiftyJSONError.invalidJSON
+            guard let byte = peek(), enclosingContainerCount < ContentParser.maximumEnclosingContainerCount else {
+                throw Declined()
             }
-
-            switch self.bytes[self.index] {
-                case UInt8(ascii: "{"):
-                    return try self.parseObject()
-                case UInt8(ascii: "["):
-                    return try self.parseArray()
-                case UInt8(ascii: "\""):
-                    return .string(try self.parseString())
-                case UInt8(ascii: "t"):
-                    try self.expect("true")
-
-                    return .bool(true)
-                case UInt8(ascii: "f"):
-                    try self.expect("false")
-
-                    return .bool(false)
-                case UInt8(ascii: "n"):
-                    try self.expect("null")
-
-                    return .null
-                default:
-                    return .number(try self.parseNumber())
+            switch byte {
+            case UInt8(ascii: "{"):
+                return try parseObject()
+            case UInt8(ascii: "["):
+                return try parseArray()
+            case UInt8(ascii: "\""):
+                return .string(try parseString())
+            case UInt8(ascii: "t"):
+                try expect("true")
+                return .bool(true)
+            case UInt8(ascii: "f"):
+                try expect("false")
+                return .bool(false)
+            case UInt8(ascii: "n"):
+                try expect("null")
+                return .null
+            case UInt8(ascii: "-"), UInt8(ascii: "0")...UInt8(ascii: "9"):
+                return .number(try parseNumber())
+            default:
+                throw Declined()
             }
         }
 
         private mutating func parseObject() throws -> Content {
-            self.index += 1 // consume `{`
+            enterContainer()
+            defer { enclosingContainerCount -= 1 }
             var dictionary: [String: Content] = [:]
-            self.skipWhitespace()
-            if self.peek() == UInt8(ascii: "}") {
-                self.index += 1
-
+            skipWhitespace()
+            if peek() == UInt8(ascii: "}") {
+                index += 1
                 return .dictionary(dictionary)
             }
 
             while true {
-                self.skipWhitespace()
-                guard self.peek() == UInt8(ascii: "\"") else {
-                    throw SwiftyJSONError.invalidJSON
+                skipWhitespace()
+                guard peek() == UInt8(ascii: "\"") else {
+                    throw Declined()
                 }
-                let key = try self.parseString()
-                self.skipWhitespace()
-                guard self.peek() == UInt8(ascii: ":") else {
-                    throw SwiftyJSONError.invalidJSON
+                let key = try parseString()
+                skipWhitespace()
+                guard peek() == UInt8(ascii: ":") else {
+                    throw Declined()
                 }
-                self.index += 1
-                self.skipWhitespace()
+                index += 1
+                skipWhitespace()
                 // `JSONSerialization` keeps the first of two equal keys, so put a replaced value back.
-                if let previousValue = dictionary.updateValue(try self.parseValue(), forKey: key) {
+                if let previousValue = dictionary.updateValue(try parseValue(), forKey: key) {
                     dictionary[key] = previousValue
                 }
-                self.skipWhitespace()
-                switch self.peek() {
-                    case UInt8(ascii: ","):
-                        self.index += 1
-                    case UInt8(ascii: "}"):
-                        self.index += 1
-
-                        return .dictionary(dictionary)
-                    default:
-                        throw SwiftyJSONError.invalidJSON
+                skipWhitespace()
+                switch peek() {
+                case UInt8(ascii: ","):
+                    index += 1
+                case UInt8(ascii: "}"):
+                    index += 1
+                    return .dictionary(dictionary)
+                default:
+                    throw Declined()
                 }
             }
         }
 
         private mutating func parseArray() throws -> Content {
-            self.index += 1 // consume `[`
+            enterContainer()
+            defer { enclosingContainerCount -= 1 }
             var array: [Content] = []
-            self.skipWhitespace()
-            if self.peek() == UInt8(ascii: "]") {
-                self.index += 1
-
+            skipWhitespace()
+            if peek() == UInt8(ascii: "]") {
+                index += 1
                 return .array(array)
             }
 
             while true {
-                self.skipWhitespace()
-                array.append(try self.parseValue())
-                self.skipWhitespace()
-                switch self.peek() {
-                    case UInt8(ascii: ","):
-                        self.index += 1
-                    case UInt8(ascii: "]"):
-                        self.index += 1
-
-                        return .array(array)
-                    default:
-                        throw SwiftyJSONError.invalidJSON
+                skipWhitespace()
+                array.append(try parseValue())
+                skipWhitespace()
+                switch peek() {
+                case UInt8(ascii: ","):
+                    index += 1
+                case UInt8(ascii: "]"):
+                    index += 1
+                    return .array(array)
+                default:
+                    throw Declined()
                 }
             }
+        }
+
+        private mutating func enterContainer() {
+            index += 1
+            enclosingContainerCount += 1
         }
 
         private mutating func parseString() throws -> String {
-            self.index += 1 // consume the opening quote
-            let start = self.index
-            // Scan for a string that needs no unescaping, which is the overwhelmingly common case, and build it in
-            // one go from the raw bytes.
-            while self.index < self.bytes.count {
-                let byte = self.bytes[self.index]
-                if byte == UInt8(ascii: "\"") {
-                    let string = String(
-                        decoding: UnsafeBufferPointer(rebasing: self.bytes[start..<self.index]),
-                        as: UTF8.self
-                    )
-                    self.index += 1
-
+            index += 1
+            let start = index
+            var isASCII = true
+            // Strings without escapes are by far the most common, so they are built in one go from the raw bytes.
+            while index < bytes.count {
+                switch bytes[index] {
+                case UInt8(ascii: "\""):
+                    let string = try makeString(UnsafeBufferPointer(rebasing: bytes[start..<index]), isASCII: isASCII)
+                    index += 1
                     return string
+                case UInt8(ascii: "\\"):
+                    return try parseEscapedString(from: start, isASCII: isASCII)
+                case ..<0x20:
+                    throw Declined()
+                case 0x80...:
+                    isASCII = false
+                default:
+                    break
                 }
-                if byte == UInt8(ascii: "\\") {
-                    return try self.parseEscapedString(from: start)
-                }
-                self.index += 1
+                index += 1
             }
 
-            throw SwiftyJSONError.invalidJSON
+            throw Declined()
         }
 
-        private mutating func parseEscapedString(from start: Int) throws -> String {
-            var utf8: [UInt8] = Array(UnsafeBufferPointer(rebasing: self.bytes[start..<self.index]))
-            while self.index < self.bytes.count {
-                let byte = self.bytes[self.index]
-                if byte == UInt8(ascii: "\"") {
-                    self.index += 1
-
-                    return String(decoding: utf8, as: UTF8.self)
-                }
-                guard byte == UInt8(ascii: "\\") else {
+        private mutating func parseEscapedString(from start: Int, isASCII: Bool) throws -> String {
+            var utf8 = Array(UnsafeBufferPointer(rebasing: bytes[start..<index]))
+            var isASCII = isASCII
+            while index < bytes.count {
+                let byte = bytes[index]
+                index += 1
+                switch byte {
+                case UInt8(ascii: "\""):
+                    return try makeString(utf8, isASCII: isASCII)
+                case UInt8(ascii: "\\"):
+                    try appendEscapeSequence(to: &utf8)
+                case ..<0x20:
+                    throw Declined()
+                case 0x80...:
+                    isASCII = false
                     utf8.append(byte)
-                    self.index += 1
-
-                    continue
-                }
-
-                self.index += 1
-                guard self.index < self.bytes.count else {
-                    throw SwiftyJSONError.invalidJSON
-                }
-                let escape = self.bytes[self.index]
-                self.index += 1
-                switch escape {
-                    case UInt8(ascii: "\""), UInt8(ascii: "\\"), UInt8(ascii: "/"):
-                        utf8.append(escape)
-                    case UInt8(ascii: "b"):
-                        utf8.append(0x08)
-                    case UInt8(ascii: "f"):
-                        utf8.append(0x0C)
-                    case UInt8(ascii: "n"):
-                        utf8.append(0x0A)
-                    case UInt8(ascii: "r"):
-                        utf8.append(0x0D)
-                    case UInt8(ascii: "t"):
-                        utf8.append(0x09)
-                    case UInt8(ascii: "u"):
-                        try self.appendUnicodeEscape(to: &utf8)
-                    default:
-                        throw SwiftyJSONError.invalidJSON
+                default:
+                    utf8.append(byte)
                 }
             }
 
-            throw SwiftyJSONError.invalidJSON
+            throw Declined()
+        }
+
+        private func makeString<UTF8Bytes: Collection>(
+            _ utf8: UTF8Bytes,
+            isASCII: Bool
+        ) throws -> String where UTF8Bytes.Element == UInt8 {
+            // `String(decoding:as:)` would silently repair invalid UTF-8, which `JSONSerialization` rejects.
+            if !isASCII {
+                var iterator = utf8.makeIterator()
+                var parser = Unicode.UTF8.ForwardParser()
+                validation: while true {
+                    switch parser.parseScalar(from: &iterator) {
+                    case .valid:
+                        continue
+                    case .emptyInput:
+                        break validation
+                    case .error:
+                        throw Declined()
+                    }
+                }
+            }
+
+            return String(decoding: utf8, as: UTF8.self)
+        }
+
+        private mutating func appendEscapeSequence(to utf8: inout [UInt8]) throws {
+            guard let escape = peek() else {
+                throw Declined()
+            }
+            index += 1
+            switch escape {
+            case UInt8(ascii: "\""), UInt8(ascii: "\\"), UInt8(ascii: "/"):
+                utf8.append(escape)
+            case UInt8(ascii: "b"):
+                utf8.append(0x08)
+            case UInt8(ascii: "f"):
+                utf8.append(0x0C)
+            case UInt8(ascii: "n"):
+                utf8.append(0x0A)
+            case UInt8(ascii: "r"):
+                utf8.append(0x0D)
+            case UInt8(ascii: "t"):
+                utf8.append(0x09)
+            case UInt8(ascii: "u"):
+                try appendUnicodeEscape(to: &utf8)
+            default:
+                throw Declined()
+            }
         }
 
         private mutating func appendUnicodeEscape(to utf8: inout [UInt8]) throws {
-            var scalarValue = UInt32(try self.parseHexQuad())
-            if scalarValue >= 0xD800, scalarValue <= 0xDBFF {
-                // A high surrogate is only valid when followed by the low surrogate it pairs with.
+            var scalarValue = UInt32(try parseHexQuad())
+            if (0xD800...0xDBFF).contains(scalarValue) {
                 guard
-                    self.index + 1 < self.bytes.count,
-                    self.bytes[self.index] == UInt8(ascii: "\\"),
-                    self.bytes[self.index + 1] == UInt8(ascii: "u")
+                    index + 1 < bytes.count,
+                    bytes[index] == UInt8(ascii: "\\"),
+                    bytes[index + 1] == UInt8(ascii: "u")
                 else {
-                    throw SwiftyJSONError.invalidJSON
+                    throw Declined()
                 }
-                self.index += 2
-                let lowSurrogate = UInt32(try self.parseHexQuad())
-                guard lowSurrogate >= 0xDC00, lowSurrogate <= 0xDFFF else {
-                    throw SwiftyJSONError.invalidJSON
+                index += 2
+                let lowSurrogate = UInt32(try parseHexQuad())
+                guard (0xDC00...0xDFFF).contains(lowSurrogate) else {
+                    throw Declined()
                 }
                 scalarValue = 0x10000 + ((scalarValue - 0xD800) << 10) + (lowSurrogate - 0xDC00)
             }
             guard let scalar = Unicode.Scalar(scalarValue) else {
-                throw SwiftyJSONError.invalidJSON
+                throw Declined()
             }
             UTF8.encode(scalar) { utf8.append($0) }
         }
 
         private mutating func parseHexQuad() throws -> UInt16 {
-            guard self.index + 4 <= self.bytes.count else {
-                throw SwiftyJSONError.invalidJSON
+            guard index + 4 <= bytes.count else {
+                throw Declined()
             }
             var value: UInt16 = 0
             for _ in 0..<4 {
-                let byte = self.bytes[self.index]
+                let byte = bytes[index]
                 let digit: UInt16
                 switch byte {
-                    case UInt8(ascii: "0")...UInt8(ascii: "9"):
-                        digit = UInt16(byte - UInt8(ascii: "0"))
-                    case UInt8(ascii: "a")...UInt8(ascii: "f"):
-                        digit = UInt16(byte - UInt8(ascii: "a")) + 10
-                    case UInt8(ascii: "A")...UInt8(ascii: "F"):
-                        digit = UInt16(byte - UInt8(ascii: "A")) + 10
-                    default:
-                        throw SwiftyJSONError.invalidJSON
+                case UInt8(ascii: "0")...UInt8(ascii: "9"):
+                    digit = UInt16(byte - UInt8(ascii: "0"))
+                case UInt8(ascii: "a")...UInt8(ascii: "f"):
+                    digit = UInt16(byte - UInt8(ascii: "a")) + 10
+                case UInt8(ascii: "A")...UInt8(ascii: "F"):
+                    digit = UInt16(byte - UInt8(ascii: "A")) + 10
+                default:
+                    throw Declined()
                 }
                 value = value << 4 | digit
-                self.index += 1
+                index += 1
             }
 
             return value
         }
 
         private mutating func parseNumber() throws -> NSNumber {
-            let start = self.index
-            var isInteger = true
-            if self.peek() == UInt8(ascii: "-") {
-                self.index += 1
+            let start = index
+            let isNegative = peek() == UInt8(ascii: "-")
+            if isNegative {
+                index += 1
             }
-            while self.index < self.bytes.count {
-                switch self.bytes[self.index] {
-                    case UInt8(ascii: "0")...UInt8(ascii: "9"):
-                        self.index += 1
-                    case UInt8(ascii: "."), UInt8(ascii: "e"), UInt8(ascii: "E"),
-                         UInt8(ascii: "+"), UInt8(ascii: "-"):
-                        isInteger = false
-                        self.index += 1
-                    default:
-                        return try self.makeNumber(from: start, isInteger: isInteger)
+            let integerStart = index
+            let integerDigitCount = skipDigits()
+            let hasLeadingZero = integerDigitCount > 0 && bytes[integerStart] == UInt8(ascii: "0")
+            guard integerDigitCount > 0, !hasLeadingZero || integerDigitCount == 1 else {
+                throw Declined()
+            }
+            var fractionDigitCount = 0
+            if peek() == UInt8(ascii: ".") {
+                index += 1
+                fractionDigitCount = skipDigits()
+                guard fractionDigitCount > 0 else {
+                    throw Declined()
                 }
             }
+            var hasExponent = false
+            if peek() == UInt8(ascii: "e") || peek() == UInt8(ascii: "E") {
+                hasExponent = true
+                index += 1
+                if peek() == UInt8(ascii: "+") || peek() == UInt8(ascii: "-") {
+                    index += 1
+                }
+                guard skipDigits() > 0 else {
+                    throw Declined()
+                }
+            }
+            let text = UnsafeBufferPointer(rebasing: bytes[start..<index])
 
-            return try self.makeNumber(from: start, isInteger: isInteger)
+            if fractionDigitCount == 0 && !hasExponent && integerDigitCount <= 18 {
+                var integer: Int64 = 0
+                for digit in bytes[integerStart..<(integerStart + integerDigitCount)] {
+                    integer = integer * 10 + Int64(digit - UInt8(ascii: "0"))
+                }
+                return NSNumber(value: isNegative ? -integer : integer)
+            }
+            let significantDigitCount = (hasLeadingZero ? 0 : integerDigitCount) + fractionDigitCount
+            if fractionDigitCount > 0 && !hasExponent && significantDigitCount <= 15,
+               let double = Double(String(decoding: text, as: UTF8.self)) {
+                return NSNumber(value: double)
+            }
+            // Beyond these, `JSONSerialization` switches to `NSDecimalNumber` and handles overflow in ways that
+            // differ by sign and representation, so it parses the remaining numbers itself.
+            guard let number = try JSONSerialization.jsonObject(with: Data(text), options: .fragmentsAllowed)
+                as? NSNumber
+            else {
+                throw Declined()
+            }
+
+            return number
         }
 
-        private func makeNumber(from start: Int, isInteger: Bool) throws -> NSNumber {
-            guard start < self.index else {
-                throw SwiftyJSONError.invalidJSON
-            }
-            let digits = UnsafeBufferPointer(rebasing: self.bytes[start..<self.index])
-            let text = String(decoding: digits, as: UTF8.self)
-            if isInteger {
-                if let integer = Int64(text) {
-                    return NSNumber(value: integer)
-                }
-                // Integers beyond `Int64` keep their precision the way `JSONSerialization` reports them.
-                if let unsignedInteger = UInt64(text) {
-                    return NSNumber(value: unsignedInteger)
-                }
-
-                return NSDecimalNumber(string: text)
-            }
-            guard let double = Double(text) else {
-                throw SwiftyJSONError.invalidJSON
+        private mutating func skipDigits() -> Int {
+            let start = index
+            while index < bytes.count, (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[index]) {
+                index += 1
             }
 
-            return NSNumber(value: double)
+            return index - start
         }
 
         private mutating func expect(_ literal: StaticString) throws {
-            guard self.index + literal.utf8CodeUnitCount <= self.bytes.count else {
-                throw SwiftyJSONError.invalidJSON
+            guard index + literal.utf8CodeUnitCount <= bytes.count else {
+                throw Declined()
             }
-            for offset in 0..<literal.utf8CodeUnitCount {
-                guard self.bytes[self.index + offset] == literal.utf8Start[offset] else {
-                    throw SwiftyJSONError.invalidJSON
-                }
+            for offset in 0..<literal.utf8CodeUnitCount where bytes[index + offset] != literal.utf8Start[offset] {
+                throw Declined()
             }
-            self.index += literal.utf8CodeUnitCount
+            index += literal.utf8CodeUnitCount
         }
 
         private func peek() -> UInt8? {
-            self.index < self.bytes.count ? self.bytes[self.index] : nil
+            index < bytes.count ? bytes[index] : nil
         }
 
         private mutating func skipWhitespace() {
-            while self.index < self.bytes.count {
-                switch self.bytes[self.index] {
-                    case 0x20, 0x09, 0x0A, 0x0D:
-                        self.index += 1
-                    default:
-                        return
+            while index < bytes.count {
+                switch bytes[index] {
+                case 0x20, 0x09, 0x0A, 0x0D:
+                    index += 1
+                default:
+                    return
                 }
             }
         }
