@@ -89,6 +89,17 @@ class SerializedObjectConversionTests: XCTestCase {
         assertConvertsLikeJSONSerialization(Data(#"{"a":{"b":\#(middle)}}"#.utf8), options: [])
     }
 
+    func testConvertsNestingInsideArraysConvertedInParallel() {
+        let nestedArrays = String(repeating: "[", count: 100) + "1" + String(repeating: "]", count: 100)
+        let nestedObjects = String(repeating: #"{"key":"#, count: 100) + #""value""# + String(repeating: "}", count: 100)
+        for nested in [nestedArrays, nestedObjects] {
+            assertConvertsLikeJSONSerialization(
+                Data("[\(Array(repeating: nested, count: 300).joined(separator: ","))]".utf8),
+                options: []
+            )
+        }
+    }
+
     func testConvertsAJSONAPIDocument() {
         var generator = SplitMix64(seed: 0x5EED)
         let resources = (0..<5_000).map { Self.resource(index: $0, using: &generator) }

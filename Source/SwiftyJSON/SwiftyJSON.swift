@@ -359,6 +359,9 @@ private struct SerializedObjectConverter {
 
     private mutating func dictionaryContent(for dictionary: NSDictionary) -> [String: Content] {
         let count = dictionary.count
+        guard count > 0 else {
+            return [:]
+        }
         var content = [String: Content](minimumCapacity: count)
         withUnsafeTemporaryAllocation(of: UnsafeRawPointer?.self, capacity: 2 * count) { buffer in
             let keys = buffer.baseAddress!
