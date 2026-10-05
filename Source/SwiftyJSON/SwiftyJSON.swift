@@ -115,7 +115,10 @@ public struct JSON: Sendable {
 	 */
     public init(data: Data, options opt: JSONSerialization.ReadingOptions = []) throws {
         let object: Any = try JSONSerialization.jsonObject(with: data, options: opt)
-        self.init(jsonObject: object)
+        var converter = SerializedObjectConverter()
+        let content = converter.content(for: object as AnyObject)
+        self.init(content: content)
+        self.error = (content == .unknown) ? .unsupportedType : nil
     }
 
     /**
@@ -324,6 +327,106 @@ private func resolveContent(for jsonObject: Any) throws -> Content {
         return .null
     default:
         return .unknown
+    }
+}
+
+// Builds the same `Content` as `resolveContent(for:)` from the objects `JSONSerialization` produces. Going through
+// `resolveContent(for:)`'s chain of dynamic casts for each of them costs several times the parse itself, so this
+// identifies them by their Core Foundation type instead, and converts large arrays on several cores.
+private struct SerializedObjectConverter {
+    private static let stringTypeID = CFStringGetTypeID()
+    private static let dictionaryTypeID = CFDictionaryGetTypeID()
+    private static let arrayTypeID = CFArrayGetTypeID()
+    private static let minimumParallelArrayCount = 256
+
+    private var isConvertingInParallel = false
+    // Keys repeat throughout a document and `JSONSerialization` mostly returns equal keys as the same object (short
+    // ones as tagged pointers), so each object is bridged to `String` only once.
+    private var keysByObject: [ObjectIdentifier: String] = [:]
+
+    mutating func content(for object: AnyObject) -> Content {
+        switch CFGetTypeID(object) {
+        case Self.stringTypeID:
+            return .string(object as! String)
+        case Self.dictionaryTypeID:
+            return .dictionary(dictionaryContent(for: unsafeDowncast(object, to: NSDictionary.self)))
+        case Self.arrayTypeID:
+            return .array(arrayContent(for: unsafeDowncast(object, to: NSArray.self)))
+        default:
+            return leafContent(for: object)
+        }
+    }
+
+    private mutating func dictionaryContent(for dictionary: NSDictionary) -> [String: Content] {
+        let count = dictionary.count
+        var content = [String: Content](minimumCapacity: count)
+        withUnsafeTemporaryAllocation(of: UnsafeRawPointer?.self, capacity: 2 * count) { buffer in
+            let keys = buffer.baseAddress!
+            let values = keys + count
+            CFDictionaryGetKeysAndValues(dictionary as CFDictionary, keys, values)
+            for index in 0..<count {
+                let key = self.key(for: Unmanaged<AnyObject>.fromOpaque(keys[index]!).takeUnretainedValue())
+                let value = self.content(for: Unmanaged<AnyObject>.fromOpaque(values[index]!).takeUnretainedValue())
+                // Keys that differ in bytes but are equal as `String`s collide here. Which of them
+                // `resolveContent(for:)` keeps depends on Swift's per-process hash seed, but it always keeps a key
+                // together with its own value, which assigning the value alone would not.
+                if content.updateValue(value, forKey: key) != nil {
+                    content.removeValue(forKey: key)
+                    content[key] = value
+                }
+            }
+        }
+
+        return content
+    }
+
+    private mutating func key(for object: AnyObject) -> String {
+        let objectIdentifier = ObjectIdentifier(object)
+        if let key = keysByObject[objectIdentifier] {
+            return key
+        }
+        let key = object as! String
+        keysByObject[objectIdentifier] = key
+
+        return key
+    }
+
+    private mutating func arrayContent(for array: NSArray) -> [Content] {
+        let count = array.count
+        guard !isConvertingInParallel, count >= Self.minimumParallelArrayCount else {
+            var content: [Content] = []
+            content.reserveCapacity(count)
+            for element in array {
+                content.append(self.content(for: element as AnyObject))
+            }
+
+            return content
+        }
+
+        let chunkCount = min(count, 4 * ProcessInfo.processInfo.activeProcessorCount)
+        return [Content](unsafeUninitializedCapacity: count) { buffer, initializedCount in
+            let elements = buffer.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
+                var converter = SerializedObjectConverter(isConvertingInParallel: true)
+                for index in (count * chunk / chunkCount)..<(count * (chunk + 1) / chunkCount) {
+                    (elements + index).initialize(to: converter.content(for: array[index] as AnyObject))
+                }
+            }
+            initializedCount = count
+        }
+    }
+
+    private func leafContent(for object: AnyObject) -> Content {
+        switch object {
+        case let string as String:
+            return .string(string)
+        case let number as NSNumber:
+            return number.isBool ? .bool(number.boolValue) : .number(number)
+        case is NSNull:
+            return .null
+        default:
+            return .unknown
+        }
     }
 }
 
